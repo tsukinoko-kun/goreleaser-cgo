@@ -10,29 +10,8 @@ permissions:
   packages: write
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-            runner: ubuntu-latest
-          - goos: linux
-            goarch: arm64
-            runner: ubuntu-24.04-arm
-          - goos: windows
-            goarch: amd64
-            runner: windows-latest
-          - goos: windows
-            goarch: arm64
-            runner: windows-latest
-          - goos: darwin
-            goarch: amd64
-            runner: macos-15
-          - goos: darwin
-            goarch: arm64
-            runner: macos-26
-    runs-on: ${{ matrix.runner }}
+  release:
+    runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -45,49 +24,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Linux: install Zig and configure musl-static CGO toolchain via Zig
-      - name: Install Zig (Linux)
-        if: matrix.goos == 'linux'
-        uses: mlugg/setup-zig@v2
-        with:
-          version: master
-
-      - name: Setup Linux CGO toolchain (musl static via Zig)
-        if: matrix.goos == 'linux'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          case "${{ matrix.goarch }}" in
-            amd64)
-              echo "CC=zig cc -target x86_64-linux-musl" >> "$GITHUB_ENV"
-              echo "CXX=zig c++ -target x86_64-linux-musl" >> "$GITHUB_ENV"
-              ;;
-            arm64)
-              echo "CC=zig cc -target aarch64-linux-musl" >> "$GITHUB_ENV"
-              echo "CXX=zig c++ -target aarch64-linux-musl" >> "$GITHUB_ENV"
-              ;;
-            *)
-              echo "Unsupported arch for Linux: ${{ matrix.goarch }}" >&2
-              exit 1
-              ;;
-          esac
-          # Ensure cgo is used and force a fully static link
-          echo "CGO_ENABLED=1" >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=-static" >> "$GITHUB_ENV"
-          # Force external linker (zig cc) and pass -static to the linker
-          # Using two -ldflags avoids quoting issues in GOFLAGS.
-          echo "GOFLAGS=-ldflags=-linkmode=external -ldflags=-extldflags=-static" >> "$GITHUB_ENV"
-
-      # Windows ARM64 CGO with Zig (existing)
-      - name: Setup Windows ARM64 CGO toolchain
-        if: matrix.goos == 'windows' && matrix.goarch == 'arm64'
-        shell: powershell
-        run: |
-          echo "CC=zig cc -target aarch64-windows" >> $env:GITHUB_ENV
-          echo "CXX=zig c++ -target aarch64-windows" >> $env:GITHUB_ENV
-
-      - name: Install Zig for cross-compilation
-        if: matrix.goos == 'windows' && matrix.goarch == 'arm64'
+      - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
           version: master
@@ -98,45 +35,9 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          distribution: goreleaser-pro
+          distribution: goreleaser
           version: "~> v2"
-          args: release --clean --split
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GORELEASER_KEY: ${{ secrets.GORELEASER }}
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.goos }}-${{ matrix.goarch }}-artifacts
-          path: dist/*
-
-  merge:
-    runs-on: ubuntu-latest
-    needs: [build]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - name: Install Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - name: Merge and release
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser-pro
-          version: "~> v2"
-          args: continue --merge
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GORELEASER_KEY: ${{ secrets.GORELEASER }}
+          PWD: ${{ github.workspace }}
